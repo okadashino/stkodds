@@ -1,0 +1,281 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: Firebase Auth UID
+    // Fields:
+    //   - uid: string (required, immutable, 1-128)
+    //   - createdAt: timestamp (required, immutable)
+    //   - isAnonymous: bool (required)
+    //
+    // Collection: leagues
+    // Document ID: league id
+    // Fields:
+    //   - name: string (required, 1-80)
+    //   - inviteCode: string (required, 4-16)
+    //   - members: list<string> (required, 1-50 UIDs)
+    //   - createdBy: string (required, immutable UID)
+    //   - seasonPoints: map<string, number> (required)
+    //
+    // Collection: rounds
+    // Document ID: round id
+    // Fields:
+    //   - leagueId: string (required, immutable)
+    //   - type: string (required, day|matchday|weekend)
+    //   - competitionCodes: list<string> (required, 1-20)
+    //   - matchday: number (optional)
+    //   - dateFrom: timestamp (required)
+    //   - dateTo: timestamp (required)
+    //   - fixtureIds: list<string> (required, 0-100)
+    //   - status: string (required, upcoming|open|locked|completed)
+    //
+    // Collection: fixtures
+    // Document ID: fixture id
+    // Fields:
+    //   - apiId: number (required)
+    //   - competition: string (required, 1-16)
+    //   - matchday: number (required)
+    //   - homeTeam: string (required, 1-80)
+    //   - awayTeam: string (required, 1-80)
+    //   - kickoff: timestamp (required)
+    //   - status: string (required, scheduled|live|finished|postponed|cancelled)
+    //   - homeScore: number (optional)
+    //   - awayScore: number (optional)
+    //
+    // Collection: predictions
+    // Document ID: prediction id
+    // Fields:
+    //   - userId: string (required, immutable, owner UID)
+    //   - roundId: string (required, immutable)
+    //   - fixtureId: string (required, immutable)
+    //   - outcome: string (required, home|draw|away)
+    //   - homeGoals: number (required, 0-99)
+    //   - awayGoals: number (required, 0-99)
+    //   - points: number (optional)
+    //   - lockedAt: timestamp (optional)
+    //
+    // Collection: leagues/{leagueId}/standings
+    // Document ID: userId
+    // Fields:
+    //   - userId: string (required, immutable)
+    //   - nickname: string (required, 1-40)
+    //   - points: number (required, >= 0)
+    //   - rank: number (required, >= 1)
+    //
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isRecent(time) {
+      return time is timestamp &&
+        time > request.time - duration.value(5, 'm') &&
+        time <= request.time;
+    }
+
+    function isValidUidList(uids) {
+      return uids is list &&
+        uids.size() > 0 &&
+        uids.size() <= 50;
+    }
+
+    function isLeagueMember(leagueId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/leagues/$(leagueId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/leagues/$(leagueId)).data.members;
+    }
+
+    function fixtureIsOpen(fixtureId) {
+      return exists(/databases/$(database)/documents/fixtures/$(fixtureId)) &&
+        get(/databases/$(database)/documents/fixtures/$(fixtureId)).data.kickoff is timestamp &&
+        get(/databases/$(database)/documents/fixtures/$(fixtureId)).data.kickoff > request.time;
+    }
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'createdAt', 'isAnonymous']) &&
+        hasOnlyAllowedFields(['uid', 'createdAt', 'isAnonymous']) &&
+        data.uid is string &&
+        data.uid.size() > 0 &&
+        data.uid.size() <= 128 &&
+        data.uid == request.auth.uid &&
+        data.createdAt is timestamp &&
+        data.isAnonymous is bool &&
+        data.isAnonymous == (request.auth.token.firebase.sign_in_provider == 'anonymous');
+    }
+
+    function isValidLeague(data) {
+      return hasRequiredFields(['name', 'inviteCode', 'members', 'createdBy', 'seasonPoints']) &&
+        hasOnlyAllowedFields(['name', 'inviteCode', 'members', 'createdBy', 'seasonPoints']) &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 80 &&
+        data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 16 &&
+        isValidUidList(data.members) &&
+        data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 128 &&
+        data.seasonPoints is map;
+    }
+
+    function isValidRound(data) {
+      return hasRequiredFields(['leagueId', 'type', 'competitionCodes', 'dateFrom', 'dateTo', 'fixtureIds', 'status']) &&
+        hasOnlyAllowedFields(['leagueId', 'type', 'competitionCodes', 'matchday', 'dateFrom', 'dateTo', 'fixtureIds', 'status']) &&
+        data.leagueId is string && data.leagueId.size() > 0 && data.leagueId.size() <= 128 &&
+        data.type in ['day', 'matchday', 'weekend'] &&
+        data.competitionCodes is list && data.competitionCodes.size() > 0 && data.competitionCodes.size() <= 20 &&
+        data.dateFrom is timestamp &&
+        data.dateTo is timestamp &&
+        data.dateTo >= data.dateFrom &&
+        data.fixtureIds is list && data.fixtureIds.size() <= 100 &&
+        data.status in ['upcoming', 'open', 'locked', 'completed'] &&
+        (!('matchday' in data) || (data.matchday is int && data.matchday >= 1 && data.matchday <= 50));
+    }
+
+    function isValidFixture(data) {
+      return hasRequiredFields(['apiId', 'competition', 'matchday', 'homeTeam', 'awayTeam', 'kickoff', 'status']) &&
+        hasOnlyAllowedFields(['apiId', 'competition', 'matchday', 'homeTeam', 'awayTeam', 'kickoff', 'status', 'homeScore', 'awayScore']) &&
+        data.apiId is int &&
+        data.competition is string && data.competition.size() > 0 && data.competition.size() <= 16 &&
+        data.matchday is int && data.matchday >= 1 && data.matchday <= 50 &&
+        data.homeTeam is string && data.homeTeam.size() > 0 && data.homeTeam.size() <= 80 &&
+        data.awayTeam is string && data.awayTeam.size() > 0 && data.awayTeam.size() <= 80 &&
+        data.kickoff is timestamp &&
+        data.status in ['scheduled', 'live', 'finished', 'postponed', 'cancelled'] &&
+        (!('homeScore' in data) || (data.homeScore is int && data.homeScore >= 0 && data.homeScore <= 99)) &&
+        (!('awayScore' in data) || (data.awayScore is int && data.awayScore >= 0 && data.awayScore <= 99));
+    }
+
+    function isValidPrediction(data) {
+      return hasRequiredFields(['userId', 'roundId', 'fixtureId', 'outcome', 'homeGoals', 'awayGoals']) &&
+        hasOnlyAllowedFields(['userId', 'roundId', 'fixtureId', 'outcome', 'homeGoals', 'awayGoals', 'points', 'lockedAt']) &&
+        data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.roundId is string && data.roundId.size() > 0 && data.roundId.size() <= 128 &&
+        data.fixtureId is string && data.fixtureId.size() > 0 && data.fixtureId.size() <= 128 &&
+        data.outcome in ['home', 'draw', 'away'] &&
+        data.homeGoals is int && data.homeGoals >= 0 && data.homeGoals <= 99 &&
+        data.awayGoals is int && data.awayGoals >= 0 && data.awayGoals <= 99 &&
+        (!('points' in data) || (data.points is int && data.points >= 0 && data.points <= 100)) &&
+        (!('lockedAt' in data) || data.lockedAt is timestamp);
+    }
+
+    function isValidStanding(data, userId) {
+      return hasRequiredFields(['userId', 'nickname', 'points', 'rank']) &&
+        hasOnlyAllowedFields(['userId', 'nickname', 'points', 'rank']) &&
+        data.userId == userId &&
+        data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.nickname is string && data.nickname.size() > 0 && data.nickname.size() <= 40 &&
+        data.points is int && data.points >= 0 && data.points <= 100000 &&
+        data.rank is int && data.rank >= 1 && data.rank <= 50;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        isRecent(request.resource.data.createdAt);
+
+      allow update: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        areImmutableFieldsUnchanged(['uid', 'createdAt']);
+
+      allow delete: if isOwner(userId);
+    }
+
+    match /leagues/{leagueId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidLeague(request.resource.data) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.auth.uid in request.resource.data.members;
+
+      allow update: if isLeagueMember(leagueId) &&
+        isValidLeague(request.resource.data) &&
+        areImmutableFieldsUnchanged(['createdBy']);
+
+      allow delete: if isAuthenticated() &&
+        resource.data.createdBy == request.auth.uid;
+
+      match /standings/{userId} {
+        allow read: if isLeagueMember(leagueId);
+
+        allow create: if isLeagueMember(leagueId) &&
+          isOwner(userId) &&
+          isValidStanding(request.resource.data, userId);
+
+        allow update: if isLeagueMember(leagueId) &&
+          isOwner(userId) &&
+          isValidStanding(request.resource.data, userId) &&
+          areImmutableFieldsUnchanged(['userId']);
+
+        allow delete: if isLeagueMember(leagueId) && isOwner(userId);
+      }
+    }
+
+    match /rounds/{roundId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidRound(request.resource.data) &&
+        isLeagueMember(request.resource.data.leagueId);
+
+      allow update: if isAuthenticated() &&
+        isValidRound(request.resource.data) &&
+        isLeagueMember(resource.data.leagueId) &&
+        areImmutableFieldsUnchanged(['leagueId']);
+
+      allow delete: if isAuthenticated() &&
+        isLeagueMember(resource.data.leagueId);
+    }
+
+    match /fixtures/{fixtureId} {
+      allow read: if isAuthenticated();
+
+      allow create, update: if isAuthenticated() &&
+        isValidFixture(request.resource.data);
+
+      allow delete: if isAuthenticated();
+    }
+
+    match /predictions/{predictionId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isOwner(request.resource.data.userId) &&
+        isValidPrediction(request.resource.data) &&
+        fixtureIsOpen(request.resource.data.fixtureId);
+
+      allow update: if isAuthenticated() &&
+        isOwner(resource.data.userId) &&
+        isValidPrediction(request.resource.data) &&
+        areImmutableFieldsUnchanged(['userId', 'roundId', 'fixtureId']) &&
+        fixtureIsOpen(request.resource.data.fixtureId);
+
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

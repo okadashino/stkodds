@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "92724783724",
+    "project_id": "stkodds",
+    "storage_bucket": "stkodds.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:92724783724:android:061ca970ff554574398649",
+        "android_client_info": {
+          "package_name": "com.stkodds.stkodds"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDm8FwU-NYCvNaLyk-jKdqjnhsVnjSZIXI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

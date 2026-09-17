@@ -1,0 +1,45 @@
+name: scoring
+
+on:
+  workflow_dispatch:
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Check secrets
+        run: |
+          if [ -z "$FOOTBALL_DATA_API_KEY" ]; then
+            echo "FOOTBALL_DATA_API_KEY is empty"
+            exit 1
+          fi
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "FIREBASE_SERVICE_ACCOUNT is empty"
+            exit 1
+          fi
+          node -e "JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)"
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run scoring
+        run: npm start
