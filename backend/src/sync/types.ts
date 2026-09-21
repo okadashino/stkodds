@@ -19,6 +19,14 @@ export interface FixtureRecord {
   status: string;
   homeScore: number | null;
   awayScore: number | null;
+  kickoff: string;
+}
+
+export interface FixtureDocument extends FixtureRecord {
+  competition: string;
+  matchday: number;
+  homeTeam: string;
+  awayTeam: string;
 }
 
 export interface FixturePatch {
@@ -30,7 +38,6 @@ export interface FixturePatch {
 export interface PredictionRecord {
   id: string;
   userId: string;
-  roundId: string;
   fixtureId: string;
   outcome: PredictionOutcome;
   homeGoals: number;
@@ -54,10 +61,12 @@ export interface LeagueRecord {
 
 export interface BackendStore {
   getActiveRounds(): Promise<RoundRecord[]>;
+  getLeagues(): Promise<LeagueRecord[]>;
   getRoundsByLeagueIds(leagueIds: string[]): Promise<RoundRecord[]>;
   getFixturesByIds(ids: string[]): Promise<FixtureRecord[]>;
+  upsertFixture(fixture: FixtureDocument): Promise<void>;
   updateFixture(id: string, patch: FixturePatch): Promise<void>;
-  getPredictionsByRoundIds(roundIds: string[]): Promise<PredictionRecord[]>;
+  getPredictionsByFixtureIds(fixtureIds: string[]): Promise<PredictionRecord[]>;
   updatePredictionPoints(id: string, points: number): Promise<void>;
   getLeaguesByIds(ids: string[]): Promise<LeagueRecord[]>;
   replaceRoundStandings(roundId: string, entries: StandingEntry[]): Promise<void>;
@@ -65,6 +74,11 @@ export interface BackendStore {
     leagueId: string,
     entries: StandingEntry[],
     seasonPoints: Record<string, number>,
+  ): Promise<void>;
+  replaceMonthStandings(
+    leagueId: string,
+    yearMonth: string,
+    entries: StandingEntry[],
   ): Promise<void>;
 }
 
@@ -79,4 +93,5 @@ export interface RunSummary {
   predictionsScored: number;
   roundStandingsUpdated: number;
   seasonStandingsUpdated: number;
+  monthStandingsUpdated: number;
 }

@@ -1,6 +1,13 @@
-import type { CollectionReference, DocumentData, Firestore, Timestamp } from "firebase-admin/firestore";
+import {
+  Timestamp,
+  type CollectionReference,
+  type DocumentData,
+  type DocumentReference,
+  type Firestore,
+} from "firebase-admin/firestore";
 import type {
   BackendStore,
+  FixtureDocument,
   FixtureRecord,
   LeagueRecord,
   PredictionRecord,
@@ -8,6 +15,7 @@ import type {
   StandingEntry,
 } from "./types";
 import type { PredictionOutcome } from "../scoring/points";
+import { monthScopeId } from "../scoring/months";
 
 const ACTIVE_STATUSES = ["open", "locked"];
 
@@ -19,6 +27,14 @@ export function createFirestoreStore(db: Firestore): BackendStore {
         .where("status", "in", ACTIVE_STATUSES)
         .get();
       return snapshot.docs.map((doc) => toRound(doc.id, doc.data()));
+    },
+
+    async getLeagues() {
+      const snapshot = await db.collection("leagues").get();
+      return loadLeagues(
+        db,
+        snapshot.docs.map((doc) => doc.ref),
+      );
     },
 
     async getRoundsByLeagueIds(leagueIds) {
@@ -52,21 +68,38 @@ export function createFirestoreStore(db: Firestore): BackendStore {
       return fixtures;
     },
 
-    async updateFixture(id, patch) {
-      await db.collection("fixtures").doc(id).update({
-        status: patch.status,
-        homeScore: patch.homeScore,
-        awayScore: patch.awayScore,
+    async upsertFixture(fixture: FixtureDocument) {
+      await db.collection("fixtures").doc(fixture.id).set({
+        apiId: fixture.apiId,
+        competition: fixture.competition,
+        matchday: fixture.matchday,
+        homeTeam: fixture.homeTeam,
+        awayTeam: fixture.awayTeam,
+        kickoff: Timestamp.fromDate(new Date(fixture.kickoff)),
+        status: fixture.status,
+        homeScore: fixture.homeScore,
+        awayScore: fixture.awayScore,
       });
     },
 
-    async getPredictionsByRoundIds(roundIds) {
+    async updateFixture(id, patch) {
+      await db.collection("fixtures").doc(id).set(
+        {
+          status: patch.status,
+          homeScore: patch.homeScore,
+          awayScore: patch.awayScore,
+        },
+        { merge: true },
+      );
+    },
+
+    async getPredictionsByFixtureIds(fixtureIds) {
       const predictions: PredictionRecord[] = [];
-      for (const ids of chunk([...new Set(roundIds)], 10)) {
+      for (const ids of chunk([...new Set(fixtureIds)], 10)) {
         if (ids.length === 0) {
           continue;
         }
-        const snapshot = await db.collection("predictions").where("roundId", "in", ids).get();
+        const snapshot = await db.collection("predictions").where("fixtureId", "in", ids).get();
         for (const doc of snapshot.docs) {
           predictions.push(toPrediction(doc.id, doc.data()));
         }
@@ -79,29 +112,8 @@ export function createFirestoreStore(db: Firestore): BackendStore {
     },
 
     async getLeaguesByIds(ids) {
-      const leagues: LeagueRecord[] = [];
-      for (const group of chunk([...new Set(ids)], 10)) {
-        if (group.length === 0) {
-          continue;
-        }
-        const refs = group.map((id) => db.collection("leagues").doc(id));
-        const docs = await db.getAll(...refs);
-        for (const doc of docs) {
-          if (!doc.exists) {
-            continue;
-          }
-          const standings = await doc.ref.collection("standings").get();
-          const nicknames: Record<string, string> = {};
-          for (const standing of standings.docs) {
-            const nickname = standing.data().nickname;
-            if (typeof nickname === "string" && nickname.length > 0) {
-              nicknames[standing.id] = nickname;
-            }
-          }
-          leagues.push(toLeague(doc.id, doc.data() ?? {}, nicknames));
-        }
-      }
-      return leagues;
+      const refs = [...new Set(ids)].map((id) => db.collection("leagues").doc(id));
+      return loadLeagues(db, refs);
     },
 
     async replaceRoundStandings(roundId, entries) {
@@ -112,7 +124,47 @@ export function createFirestoreStore(db: Firestore): BackendStore {
       await db.collection("leagues").doc(leagueId).update({ seasonPoints });
       await replaceStandings(db.collection("leagues").doc(leagueId).collection("standings"), entries);
     },
+
+    async replaceMonthStandings(leagueId, yearMonth, entries) {
+      await replaceStandings(
+        db
+          .collection("leagues")
+          .doc(leagueId)
+          .collection("scopes")
+          .doc(monthScopeId(yearMonth))
+          .collection("standings"),
+        entries,
+      );
+    },
   };
+}
+
+async function loadLeagues(
+  db: Firestore,
+  refs: Array<DocumentReference<DocumentData>>,
+): Promise<LeagueRecord[]> {
+  const leagues: LeagueRecord[] = [];
+  for (const group of chunk(refs, 10)) {
+    if (group.length === 0) {
+      continue;
+    }
+    const docs = await db.getAll(...group);
+    for (const doc of docs) {
+      if (!doc.exists) {
+        continue;
+      }
+      const standings = await doc.ref.collection("standings").get();
+      const nicknames: Record<string, string> = {};
+      for (const standing of standings.docs) {
+        const nickname = standing.data().nickname;
+        if (typeof nickname === "string" && nickname.length > 0) {
+          nicknames[standing.id] = nickname;
+        }
+      }
+      leagues.push(toLeague(doc.id, doc.data() ?? {}, nicknames));
+    }
+  }
+  return leagues;
 }
 
 async function replaceStandings(
@@ -159,6 +211,7 @@ function toFixture(id: string, data: DocumentData): FixtureRecord {
     status: String(data.status ?? ""),
     homeScore: asNullableNumber(data.homeScore),
     awayScore: asNullableNumber(data.awayScore),
+    kickoff: asDate(data.kickoff).toISOString(),
   };
 }
 
@@ -166,7 +219,6 @@ function toPrediction(id: string, data: DocumentData): PredictionRecord {
   return {
     id,
     userId: String(data.userId ?? ""),
-    roundId: String(data.roundId ?? ""),
     fixtureId: String(data.fixtureId ?? ""),
     outcome: asOutcome(data.outcome),
     homeGoals: Number(data.homeGoals ?? 0),
