@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import type { PredictionOutcome } from "../scoring/points";
 import { monthScopeId } from "../scoring/months";
+import { nicknamesFromUsers } from "../scoring/nicknames";
 
 const ACTIVE_STATUSES = ["open", "locked"];
 
@@ -153,18 +154,30 @@ async function loadLeagues(
       if (!doc.exists) {
         continue;
       }
-      const standings = await doc.ref.collection("standings").get();
-      const nicknames: Record<string, string> = {};
-      for (const standing of standings.docs) {
-        const nickname = standing.data().nickname;
-        if (typeof nickname === "string" && nickname.length > 0) {
-          nicknames[standing.id] = nickname;
-        }
-      }
-      leagues.push(toLeague(doc.id, doc.data() ?? {}, nicknames));
+      const data = doc.data() ?? {};
+      const members = Array.isArray(data.members) ? data.members.map(String) : [];
+      const nicknames = await loadUserNicknames(db, members);
+      leagues.push(toLeague(doc.id, data, nicknames));
     }
   }
   return leagues;
+}
+
+async function loadUserNicknames(
+  db: Firestore,
+  userIds: string[],
+): Promise<Record<string, string>> {
+  const users: Array<{ id: string; nickname?: unknown }> = [];
+  for (const group of chunk([...new Set(userIds)], 10)) {
+    if (group.length === 0) {
+      continue;
+    }
+    const docs = await db.getAll(...group.map((id) => db.collection("users").doc(id)));
+    for (const doc of docs) {
+      users.push({ id: doc.id, nickname: doc.exists ? doc.data()?.nickname : undefined });
+    }
+  }
+  return nicknamesFromUsers(users);
 }
 
 async function replaceStandings(
