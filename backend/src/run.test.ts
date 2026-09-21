@@ -215,13 +215,14 @@ describe("run", () => {
     });
 
     expect(getMatchday).not.toHaveBeenCalled();
-    expect(acquire).toHaveBeenCalledTimes(ALLOWED_COMPETITIONS.length * 2);
+    expect(acquire).toHaveBeenCalledTimes(ALLOWED_COMPETITIONS.length * 3);
     expect(getMatches.mock.calls.map((call) => call[0])).toEqual(
-      ALLOWED_COMPETITIONS.flatMap((code) => [code, code]),
+      ALLOWED_COMPETITIONS.flatMap((code) => [code, code, code]),
     );
     for (const code of ALLOWED_COMPETITIONS) {
       expect(getMatches).toHaveBeenCalledWith(code, "2026-09-15", "2026-09-23");
       expect(getMatches).toHaveBeenCalledWith(code, "2026-09-24", "2026-10-02");
+      expect(getMatches).toHaveBeenCalledWith(code, "2026-10-03", "2026-10-09");
     }
 
     expect(upserts.some((fixture) => fixture.apiId === 9)).toBe(false);
@@ -317,5 +318,67 @@ describe("run", () => {
     expect(logger.info).toHaveBeenCalledWith(
       "Sync summary: fixturesUpdated=4 fixturesFinished=1 predictionsScored=1 roundStandings=2 seasonStandings=2 monthStandings=1",
     );
+  });
+
+  it("keeps 10 October in the palinsesto from 21 September", async () => {
+    const upserts: FixtureDocument[] = [];
+    const october = match({
+      apiId: 400,
+      competition: "PL",
+      matchday: 8,
+      homeTeam: "Arsenal",
+      awayTeam: "Chelsea",
+      kickoff: "2026-10-10T14:00:00Z",
+    });
+    const tooFar = match({
+      apiId: 401,
+      competition: "PL",
+      matchday: 8,
+      homeTeam: "Liverpool",
+      awayTeam: "Everton",
+      kickoff: "2026-10-13T19:00:00Z",
+    });
+
+    const store: BackendStore = {
+      getActiveRounds: async () => [],
+      getLeagues: async () => [],
+      getRoundsByLeagueIds: async () => [],
+      getFixturesByIds: async () => [],
+      upsertFixture: async (fixture) => {
+        upserts.push(fixture);
+      },
+      updateFixture: async () => undefined,
+      getPredictionsByFixtureIds: async () => [],
+      updatePredictionPoints: async () => undefined,
+      getLeaguesByIds: async () => [],
+      replaceRoundStandings: async () => undefined,
+      replaceSeasonStandings: async () => undefined,
+      replaceMonthStandings: async () => undefined,
+    };
+
+    const getMatches = vi.fn(async (competition: string, from: string, to: string) => {
+      if (competition !== "PL") {
+        return [];
+      }
+      return [october, tooFar].filter((item) => {
+        const day = item.kickoff.slice(0, 10);
+        return day >= from && day <= to;
+      });
+    });
+
+    await run({
+      store,
+      client: { getMatches, getMatchday: vi.fn() } as unknown as FootballDataClient,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      now: new Date("2026-09-21T12:00:00.000Z"),
+      throttle: { acquire: async () => undefined },
+    });
+
+    for (const code of ALLOWED_COMPETITIONS) {
+      expect(getMatches).toHaveBeenCalledWith(code, "2026-09-18", "2026-09-26");
+      expect(getMatches).toHaveBeenCalledWith(code, "2026-09-27", "2026-10-05");
+      expect(getMatches).toHaveBeenCalledWith(code, "2026-10-06", "2026-10-12");
+    }
+    expect(upserts.map((fixture) => fixture.apiId)).toEqual([400]);
   });
 });

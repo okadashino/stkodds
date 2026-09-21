@@ -20,7 +20,7 @@ import type {
   SyncLogger,
 } from "./sync/types";
 
-export const PALINSESTO_DAYS = 14;
+export const PALINSESTO_DAYS = 21;
 export const MATCHDAY_MAX_DAYS = 3;
 export const FINISHED_LOOKBACK_DAYS = MATCHDAY_MAX_DAYS;
 
@@ -58,7 +58,7 @@ export async function run(options: {
     monthStandingsUpdated: 0,
   };
 
-  // (1) Palinsesto: today through the next ~2 weeks.
+  // (1) Palinsesto: today through the next ~3 weeks.
   const palinsesto = uniqueByApiId(
     matches.filter((match) => {
       const day = kickoffDate(match);
