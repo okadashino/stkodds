@@ -2,6 +2,9 @@ name: scoring
 
 on:
   workflow_dispatch:
+  schedule:
+    # Hourly during European match windows (UTC).
+    - cron: "0 14-23 * * *"
 
 jobs:
   score:
